@@ -98,21 +98,35 @@ latest_ndx_return = (df['NDX_Return'].iloc[-1] * 100)
 beta = df['KOSPI_Daily_Return'].cov(df['NDX_Return']) / df['NDX_Return'].var()
 expected_kospi_return = latest_ndx_return * beta
 
+# 🚨 메일 본문 내용 (상세 설명 및 이모지 적용)
 report_message = f"""
+[📈 나스닥-코스피 시차 동조화 분석 리포트]
+
+이 분석은 전일 미국 나스닥 지수의 변동이 당일 한국 코스피 시장에 미치는 영향을 과거 5년 치 통계로 분석하여, 아침 장 시작 후 장중 추세가 어떻게 흘러갈지 예측하는 모델입니다.
+
 분석 기준일: {datetime.today().strftime('%Y-%m-%d')}
 
-조건 충족 횟수: {total_events}일
-갭상승 후 장중 양봉 마감 횟수: {success_events}일
-추세 유지 확률: {prob:.2f}%
+■ 통계 지표 분석
+1. 조건 충족 횟수: {total_events}일
+👉 최근 5년간 전날 밤 나스닥이 1% 이상 상승하고, 그 영향으로 당일 아침 코스피가 갭상승(전일 종가보다 높게 시작)으로 출발한 총 일수입니다.
 
+2. 갭상승 후 장중 양봉 마감 횟수: {success_events}일
+👉 위 조건으로 기분 좋게 출발한 날 중에서, 개장 직후 쏟아지는 차익실현 매물을 이겨내고 장 마감 때까지 시초가보다 높은 가격(양봉)을 유지한 일수입니다.
+
+3. 추세 유지 확률: {prob:.2f}%
+👉 코스피가 미국장 훈풍을 받아 갭상승 출발했을 때, 오후 마감까지 하락 반전하지 않고 상승 추세를 지켜낼 수 있는 통계적 확률입니다.
+
+■ 🎯 오늘 장 전망
 전날 나스닥 등락률 : {latest_ndx_return:.2f}%
-코스피 예상 등락률 : {expected_kospi_return:.2f}%
+오늘의 코스피 예상 등락률 : {expected_kospi_return:.2f}%
+(※ 예상 등락률은 과거 5년간 두 시장의 민감도(Beta)를 바탕으로 산출한 통계적 기대치입니다.)
 """
 
 print("\n--- 분석 결과 ---")
 print(report_message)
 
 # 6. 구글 앱스 스크립트 웹훅으로 전송
+# 🚨 알려주신 본인의 구글 웹앱 URL 적용 완료
 webhook_url = "https://script.google.com/macros/s/AKfycbxDeelSjMDB1dD-Lsj2nRs8azQUb0TwDyGcSjCTHvtUqfHYbGb-q_pTB-PPyPvXZ-63kg/exec"
 
 payload = {
@@ -124,10 +138,12 @@ payload = {
 
 try:
     if "복사한_구글_웹앱_URL" not in webhook_url:
+        # 🚨 이모지 깨짐 방지(utf-8) 및 무한 대기 방지(timeout) 적용 완료
         response = requests.post(
             webhook_url, 
-            headers={"Content-Type": "application/json"},
-            data=json.dumps(payload)
+            headers={"Content-Type": "application/json; charset=utf-8"},
+            data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+            timeout=10
         )
         if response.status_code == 200:
             print("\n✅ 구글 시트 기록 및 이메일 전송 요청 완료")
