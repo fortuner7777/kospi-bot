@@ -7,9 +7,10 @@ import time
 import sys
 from datetime import datetime, timedelta
 
-# 1. 분석 기간 설정 (최근 5년)
-end_date = datetime.today().strftime("%Y%m%d")
-start_date = (datetime.today() - timedelta(days=365*5)).strftime("%Y%m%d")
+# 1. 분석 기간 및 한국 시간(KST) 설정 (최근 5년)
+kst_now = datetime.utcnow() + timedelta(hours=9)
+end_date = kst_now.strftime("%Y%m%d")
+start_date = (kst_now - timedelta(days=365*5)).strftime("%Y%m%d")
 
 print("데이터 수집을 시작합니다...")
 
@@ -37,7 +38,6 @@ if kospi.empty:
     try:
         yf_start = start_date[:4] + '-' + start_date[4:6] + '-' + start_date[6:]
         yf_end = end_date[:4] + '-' + end_date[4:6] + '-' + end_date[6:]
-        # auto_adjust=False 추가로 경고 메시지 제거
         temp_kospi = yf.download('^KS11', start=yf_start, end=yf_end, auto_adjust=False)
         
         if isinstance(temp_kospi.columns, pd.MultiIndex):
@@ -57,7 +57,6 @@ if kospi.empty:
 # 3. NASDAQ 지수 수집 (^IXIC)
 print("\n[2단계] NASDAQ 데이터 수집 시도...")
 try:
-    # auto_adjust=False 추가로 경고 메시지 제거
     nasdaq = yf.download('^IXIC', start=start_date[:4]+'-'+start_date[4:6]+'-'+start_date[6:], 
                          end=end_date[:4]+'-'+end_date[4:6]+'-'+end_date[6:], auto_adjust=False)
     
@@ -98,13 +97,13 @@ latest_ndx_return = (df['NDX_Return'].iloc[-1] * 100)
 beta = df['KOSPI_Daily_Return'].cov(df['NDX_Return']) / df['NDX_Return'].var()
 expected_kospi_return = latest_ndx_return * beta
 
-# 🚨 메일 본문 내용 (상세 설명 및 이모지 적용)
+# 🚨 메일 본문 내용 (KST 날짜 적용 및 줄바꿈 오타 수정)
 report_message = f"""
 [📈 나스닥-코스피 시차 동조화 분석 리포트]
 
 이 분석은 전일 미국 나스닥 지수의 변동이 당일 한국 코스피 시장에 미치는 영향을 과거 5년 치 통계로 분석하여, 아침 장 시작 후 장중 추세가 어떻게 흘러갈지 예측하는 모델입니다.
 
-분석 기준일: {datetime.today().strftime('%Y-%m-%d')}
+분석 기준일: {kst_now.strftime('%Y-%m-%d')}
 
 ■ 통계 지표 분석
 1. 조건 충족 횟수: {total_events}일
@@ -126,11 +125,10 @@ print("\n--- 분석 결과 ---")
 print(report_message)
 
 # 6. 구글 앱스 스크립트 웹훅으로 전송
-# 🚨 알려주신 본인의 구글 웹앱 URL 적용 완료
 webhook_url = "https://script.google.com/macros/s/AKfycbxDeelSjMDB1dD-Lsj2nRs8azQUb0TwDyGcSjCTHvtUqfHYbGb-q_pTB-PPyPvXZ-63kg/exec"
 
 payload = {
-    "date": datetime.today().strftime("%Y-%m-%d"),
+    "date": kst_now.strftime("%Y-%m-%d"),
     "ndx_return": f"{latest_ndx_return:.2f}%",
     "prob": f"{prob:.2f}%",
     "message": report_message
@@ -138,7 +136,7 @@ payload = {
 
 try:
     if "복사한_구글_웹앱_URL" not in webhook_url:
-        # 🚨 이모지 깨짐 방지(utf-8) 및 무한 대기 방지(timeout) 적용 완료
+        # UTF-8 인코딩 처리 추가
         response = requests.post(
             webhook_url, 
             headers={"Content-Type": "application/json; charset=utf-8"},
