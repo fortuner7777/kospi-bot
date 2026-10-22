@@ -74,19 +74,13 @@ except Exception as e:
     print(f"미국 지수 수집 실패: {e}")
     sys.exit()
 
-# 4. 공식 코스피 200 야간선물 (E-mini KOSPI 200) 데이터 수집
+# 4. 공식 코스피 200 야간선물 (E-mini KOSPI 200) 데이터 수집 [★안정성 강화 버전★]
 print("[3단계] 공식 야간선물 데이터 수집...")
-night_futures_msg = "데이터 수집 지연"
+night_futures_msg = "데이터 수집 지연 (Yahoo Finance 응답 없음)"
 try:
-    yf_start_short = (kst_now - timedelta(days=10)).strftime("%Y-%m-%d")
-    yf_end_short = (kst_now + timedelta(days=1)).strftime("%Y-%m-%d")
+    # 날짜 지정 오류 방지를 위해 가장 최근 5일치 데이터를 직접 불러옵니다.
+    kf = yf.Ticker("KOS=F").history(period="5d")
     
-    # 심볼 KOS=F (CME 야간선물)
-    kf = yf.download('KOS=F', start=yf_start_short, end=yf_end_short, auto_adjust=False)
-    if isinstance(kf.columns, pd.MultiIndex):
-        kf.columns = kf.columns.get_level_values(0)
-        
-    kf = kf.dropna()
     if not kf.empty:
         last_kf_close = kf['Close'].iloc[-1]
         prev_kf_close = kf['Close'].iloc[-2] if len(kf) > 1 else last_kf_close
