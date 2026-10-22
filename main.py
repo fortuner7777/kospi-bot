@@ -6,9 +6,6 @@ import json
 import time
 import sys
 from datetime import datetime, timedelta
-from bs4 import BeautifulSoup
-from io import StringIO
-import cloudscraper # 봇 방어막 우회 라이브러리 추가
 
 # 1. 분석 기간 및 한국 시간(KST) 설정
 kst_now = datetime.utcnow() + timedelta(hours=9)
@@ -77,8 +74,32 @@ except Exception as e:
     print(f"미국 지수 수집 실패: {e}")
     sys.exit()
 
-# 4. 코스피 수급 데이터 수집
-print("[3단계] 코스피 수급 데이터 수집...")
+# 4. 공식 코스피 200 야간선물 (E-mini KOSPI 200) 데이터 수집
+print("[3단계] 공식 야간선물 데이터 수집...")
+night_futures_msg = "데이터 수집 지연"
+try:
+    yf_start_short = (kst_now - timedelta(days=10)).strftime("%Y-%m-%d")
+    yf_end_short = (kst_now + timedelta(days=1)).strftime("%Y-%m-%d")
+    
+    # 심볼 KOS=F (CME 야간선물)
+    kf = yf.download('KOS=F', start=yf_start_short, end=yf_end_short, auto_adjust=False)
+    if isinstance(kf.columns, pd.MultiIndex):
+        kf.columns = kf.columns.get_level_values(0)
+        
+    kf = kf.dropna()
+    if not kf.empty:
+        last_kf_close = kf['Close'].iloc[-1]
+        prev_kf_close = kf['Close'].iloc[-2] if len(kf) > 1 else last_kf_close
+        kf_change_pct = ((last_kf_close - prev_kf_close) / prev_kf_close) * 100
+        
+        direction = "상승" if kf_change_pct > 0 else "하락" if kf_change_pct < 0 else "보합"
+        night_futures_msg = f"종가 {last_kf_close:,.2f}pt ({direction} {kf_change_pct:+.2f}%)"
+        print("야간선물 데이터 수집 완료")
+except Exception as e:
+    print(f"야간선물 수집 에러: {e}")
+
+# 5. 코스피 수급 데이터 수집
+print("[4단계] 코스피 수급 데이터 수집...")
 investor_msg = "해외 IP 차단으로 인한 데이터 수집 생략"
 try:
     b_days = stock.get_business_days_dates(recent_60_days, end_date)
@@ -95,41 +116,6 @@ try:
     print("수급 데이터 수집 완료")
 except Exception as e:
     print("수급 데이터 수집 실패 (기본값 처리)")
-
-# 5. 야간선물(사상최강) 특수 크롤링 (봇 우회)
-print("[4단계] 야간선물(사상최강) 데이터 수집...")
-night_futures_msg = "데이터 수집 실패 (사이트 강력 차단)"
-try:
-    url = "https://esignal.co.kr/kospi200-futures-night/"
-    # 일반 브라우저로 완벽하게 위장하는 우회 객체 생성
-    scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
-    res = scraper.get(url, timeout=15)
-    res.encoding = 'utf-8' 
-    
-    if res.status_code == 200:
-        html_io = StringIO(res.text)
-        tables = pd.read_html(html_io)
-        
-        target_df = None
-        for i, df in enumerate(tables):
-            df_str = df.to_string().replace(" ", "")
-            if any(keyword in df_str for keyword in ["상승", "하락", "저항", "지지", "목표"]):
-                if len(df) > 1 or len(df.columns) > 1:
-                    target_df = df.fillna("")
-                    break
-        
-        if target_df is not None:
-            night_futures_msg = "\n"
-            for _, row in target_df.iterrows():
-                row_str = " | ".join([str(x) for x in row.values if str(x).strip() != ""])
-                night_futures_msg += f"  > {row_str}\n"
-            print("야간선물 목표가 데이터 수집 완료")
-        else:
-            night_futures_msg = "페이지 내 목표가 표(Table)를 찾지 못했습니다."
-    else:
-        print(f"야간선물 접속 실패 (상태 코드: {res.status_code})")
-except Exception as e:
-    print(f"야간선물 수집 에러: {e}")
 
 # 6. 데이터 병합 및 통계 확률 연산
 df = pd.merge(kospi, nasdaq, left_index=True, right_index=True, how='left')
@@ -171,10 +157,10 @@ report_message = f"""
 
 분석 기준일: {kst_now.strftime('%Y-%m-%d')}
 
-■ 야간선물 지표 (사상최강 목표가 추출) {night_futures_msg}
 ■ 글로벌 시장 변동 (전일장 기준)
-- 나스닥 지수: {latest_ndx_return:.2f}%
-- 필라델피아 반도체: {latest_sox_return:.2f}%
+- E-mini 코스피200 야간선물: {night_futures_msg}
+- 미국 나스닥 지수: {latest_ndx_return:+.2f}%
+- 필라델피아 반도체: {latest_sox_return:+.2f}%
 
 ■ 코스피 최근 영업일 수급 동향 (순매수)
 - {investor_msg}
@@ -188,7 +174,7 @@ report_message = f"""
   > 하락 시 2차 지지선 (61.8%): {fib_618:,.2f}
 
 ■ 오늘 장 통계적 전망 (최근 5년 데이터 기준)
-- 코스피 예상 등락률: {expected_kospi_return:.2f}%
+- 코스피 통계적 예상 등락률: {expected_kospi_return:+.2f}%
 - 미국장 상승 연동 코스피 장중 양봉 유지 확률: {prob:.2f}%
   (조건 충족 횟수: {total_events}일 중 {success_events}일 양봉 마감)
 """
