@@ -7,75 +7,115 @@ import time
 import sys
 from datetime import datetime, timedelta
 
-# 1. 분석 기간 및 한국 시간(KST) 설정 (최근 5년)
+# ==========================================
+# 1. 분석 기간 및 한국 시간(KST) 설정
+# ==========================================
 kst_now = datetime.utcnow() + timedelta(hours=9)
 end_date = kst_now.strftime("%Y%m%d")
 start_date = (kst_now - timedelta(days=365*5)).strftime("%Y%m%d")
+recent_60_days = (kst_now - timedelta(days=90)).strftime("%Y%m%d") # 파동 분석용 (여유있게 90일전)
 
 print("데이터 수집을 시작합니다...")
 
-# 2. KOSPI 지수 수집 (pykrx 실패 시 yfinance ^KS11 백업 로직 추가)
+# ==========================================
+# 2. KOSPI 지수 수집 (pykrx + yfinance 백업)
+# ==========================================
 max_retries = 3
 kospi = pd.DataFrame()
+recent_kospi_high = 0
+recent_kospi_low = 0
 
-print("[1단계] pykrx를 통한 KOSPI 데이터 수집 시도...")
+print("[1단계] KOSPI 데이터 수집 시도...")
 for attempt in range(max_retries):
     try:
         temp_kospi = stock.get_index_ohlcv(start_date, end_date, "1001", name_display=False)
         if not temp_kospi.empty:
             kospi = temp_kospi[['시가', '종가']].rename(columns={'시가': 'KOSPI_Open', '종가': 'KOSPI_Close'})
-            print(f"✅ KOSPI 데이터 수집 완료 (pykrx 시도 횟수: {attempt + 1})")
+            # 파동 분석을 위한 최근 60영업일 고점/저점 추출
+            recent_kospi_high = temp_kospi['고가'].tail(60).max()
+            recent_kospi_low = temp_kospi['저가'].tail(60).min()
+            print(f"✅ KOSPI 데이터 수집 완료 (pykrx)")
             break
-        else:
-            print(f"⚠️ 데이터가 비어있습니다. 재시도 중... ({attempt + 1}/{max_retries})")
     except Exception as e:
-        print(f"⚠️ pykrx 수집 에러: {e}. 재시도 중... ({attempt + 1}/{max_retries})")
-    time.sleep(3)
+        time.sleep(3)
 
-# pykrx 수집 실패 시 Yahoo Finance에서 백업 수집
+# pykrx 실패 시 yfinance 백업
 if kospi.empty:
-    print("\n⚠️ pykrx 수집 실패로 인해 [백업] yfinance(^KS11)로 KOSPI 수집을 시도합니다...")
     try:
         yf_start = start_date[:4] + '-' + start_date[4:6] + '-' + start_date[6:]
         yf_end = end_date[:4] + '-' + end_date[4:6] + '-' + end_date[6:]
         temp_kospi = yf.download('^KS11', start=yf_start, end=yf_end, auto_adjust=False)
-        
         if isinstance(temp_kospi.columns, pd.MultiIndex):
             temp_kospi.columns = temp_kospi.columns.get_level_values(0)
-            
         if not temp_kospi.empty:
             kospi = temp_kospi[['Open', 'Close']].rename(columns={'Open': 'KOSPI_Open', 'Close': 'KOSPI_Close'})
             kospi.index = kospi.index.tz_localize(None)
-            print("✅ KOSPI 데이터 수집 완료 (yfinance 백업 사용)")
+            recent_kospi_high = temp_kospi['High'].tail(60).max()
+            recent_kospi_low = temp_kospi['Low'].tail(60).min()
+            print("✅ KOSPI 데이터 수집 완료 (yfinance 백업)")
     except Exception as e:
-        print(f"❌ KOSPI 백업 데이터 수집 실패: {e}")
+        print("❌ KOSPI 수집 실패")
+        sys.exit()
 
-if kospi.empty:
-    print("❌ KOSPI 데이터 수집에 완전히 실패했습니다. 연산을 중단합니다.")
-    sys.exit()
-
-# 3. NASDAQ 지수 수집 (^IXIC)
-print("\n[2단계] NASDAQ 데이터 수집 시도...")
+# ==========================================
+# 3. 미국 지수 수집 (NASDAQ & SOX 반도체)
+# ==========================================
+print("[2단계] 미국 시장(나스닥, 필라델피아 반도체) 데이터 수집...")
 try:
-    nasdaq = yf.download('^IXIC', start=start_date[:4]+'-'+start_date[4:6]+'-'+start_date[6:], 
-                         end=end_date[:4]+'-'+end_date[4:6]+'-'+end_date[6:], auto_adjust=False)
+    yf_start = start_date[:4] + '-' + start_date[4:6] + '-' + start_date[6:]
+    yf_end = end_date[:4] + '-' + end_date[4:6] + '-' + end_date[6:]
     
-    if isinstance(nasdaq.columns, pd.MultiIndex):
-        nasdaq.columns = nasdaq.columns.get_level_values(0)
-    
-    nasdaq = nasdaq[['Close']].rename(columns={'Close': 'NDX_Close'})
+    us_markets = yf.download(['^IXIC', '^SOX'], start=yf_start, end=yf_end, auto_adjust=False)
+    if isinstance(us_markets.columns, pd.MultiIndex):
+        # 종가(Close)만 추출하고 멀티인덱스 평탄화
+        us_close = us_markets['Close']
+    else:
+        us_close = us_markets
+        
+    nasdaq = us_close[['^IXIC']].rename(columns={'^IXIC': 'NDX_Close'}).dropna()
+    sox = us_close[['^SOX']].rename(columns={'^SOX': 'SOX_Close'}).dropna()
     nasdaq.index = nasdaq.index.tz_localize(None)
-    print("✅ NASDAQ 데이터 수집 완료")
+    sox.index = sox.index.tz_localize(None)
+    
+    latest_ndx_return = ((nasdaq['NDX_Close'].iloc[-1] - nasdaq['NDX_Close'].iloc[-2]) / nasdaq['NDX_Close'].iloc[-2]) * 100
+    latest_sox_return = ((sox['SOX_Close'].iloc[-1] - sox['SOX_Close'].iloc[-2]) / sox['SOX_Close'].iloc[-2]) * 100
+    print("✅ 미국 지수 데이터 수집 완료")
 except Exception as e:
-    print(f"❌ NASDAQ 데이터 수집 실패: {e}")
+    print(f"❌ 미국 지수 수집 실패: {e}")
     sys.exit()
 
-# 4. 데이터 병합 및 시차(Lag) 정렬
+# ==========================================
+# 4. 코스피 투자자별 수급 수집 (최근 영업일)
+# ==========================================
+print("[3단계] 코스피 수급 데이터 수집...")
+investor_msg = "수급 데이터 수집 지연 (오류)"
+try:
+    # 가장 최근 개장일 찾기
+    b_days = stock.get_business_days_dates(recent_60_days, end_date)
+    last_b_day = b_days[-1].strftime("%Y%m%d") if len(b_days) > 0 else end_date
+    
+    # KOSPI 수급 (단위: 원 -> 억원 변환)
+    investor_df = stock.get_market_trading_value_by_investor(last_b_day, last_b_day, "KOSPI")
+    
+    # '순매수' 컬럼 추출 (없을 경우 예외 처리)
+    net_buy_col = '순매수' if '순매수' in investor_df.columns else investor_df.columns[-1]
+    
+    retail_net = investor_df.loc['개인', net_buy_col] / 100000000
+    foreign_net = investor_df.loc['외국인', net_buy_col] / 100000000
+    inst_net = investor_df.loc['기관합계', net_buy_col] / 100000000
+    
+    investor_msg = f"외국인: {foreign_net:,.0f}억 | 기관: {inst_net:,.0f}억 | 개인: {retail_net:,.0f}억"
+    print("✅ 수급 데이터 수집 완료")
+except Exception as e:
+    print(f"⚠️ 수급 데이터 수집 실패 (기본값 처리): {e}")
+
+# ==========================================
+# 5. 데이터 병합 및 통계 확률 연산
+# ==========================================
 df = pd.merge(kospi, nasdaq, left_index=True, right_index=True, how='left')
 
 df['NDX_Close_prev'] = df['NDX_Close'].shift(1)
 df['NDX_Return'] = (df['NDX_Close_prev'] - df['NDX_Close'].shift(2)) / df['NDX_Close'].shift(2)
-
 df['KOSPI_Prev_Close'] = df['KOSPI_Close'].shift(1)
 df['KOSPI_Daily_Return'] = (df['KOSPI_Close'] - df['KOSPI_Prev_Close']) / df['KOSPI_Prev_Close']
 df['Gap_Return'] = (df['KOSPI_Open'] - df['KOSPI_Prev_Close']) / df['KOSPI_Prev_Close']
@@ -83,7 +123,6 @@ df['Intraday_Return'] = (df['KOSPI_Close'] - df['KOSPI_Open']) / df['KOSPI_Open'
 
 df = df.dropna()
 
-# 5. 조건부 확률 도출 및 예상 등락률 산출
 cond_gap_up = (df['NDX_Return'] >= 0.01) & (df['Gap_Return'] > 0)
 cond_intraday_up = df['Intraday_Return'] > 0
 
@@ -91,40 +130,58 @@ total_events = len(df[cond_gap_up])
 success_events = len(df[cond_gap_up & cond_intraday_up])
 prob = (success_events / total_events) * 100 if total_events > 0 else 0
 
-latest_ndx_return = (df['NDX_Return'].iloc[-1] * 100)
-
-# 베타(Beta) 계수 산출 및 코스피 예상 등락률 계산
 beta = df['KOSPI_Daily_Return'].cov(df['NDX_Return']) / df['NDX_Return'].var()
 expected_kospi_return = latest_ndx_return * beta
+current_kospi = kospi['KOSPI_Close'].iloc[-1]
 
-# 🚨 메일 본문 내용 (KST 날짜 적용 및 줄바꿈 오타 수정)
+# ==========================================
+# 6. 엘리어트 파동 및 피보나치 레벨 연산
+# ==========================================
+# 고점과 저점의 낙폭을 계산하여 되돌림(반등) 및 하락 지지선 산출
+wave_diff = recent_kospi_high - recent_kospi_low
+fib_236 = recent_kospi_high - (wave_diff * 0.236) # 강한 저항선
+fib_382 = recent_kospi_high - (wave_diff * 0.382) # 1차 지지선 / 저항선
+fib_500 = recent_kospi_high - (wave_diff * 0.500) # 중심선 (추세 판단)
+fib_618 = recent_kospi_high - (wave_diff * 0.618) # 주요 지지선 (조정 파동 마지노선)
+
+if current_kospi > fib_500:
+    trend_msg = "상승 추세 (상승 5파 진행 또는 눌림목 구간)"
+else:
+    trend_msg = "하락 조정 추세 (하락 3파 또는 조정 국면)"
+
+# ==========================================
+# 7. 최종 리포트 메시지 생성 및 웹훅 전송
+# ==========================================
 report_message = f"""
-[📈 나스닥-코스피 시차 동조화 분석 리포트]
-
-이 분석은 전일 미국 나스닥 지수의 변동이 당일 한국 코스피 시장에 미치는 영향을 과거 5년 치 통계로 분석하여, 아침 장 시작 후 장중 추세가 어떻게 흘러갈지 예측하는 모델입니다.
+[📈 종합 주식시장 시차 동조화 및 파동 분석 리포트]
 
 분석 기준일: {kst_now.strftime('%Y-%m-%d')}
 
-■ 통계 지표 분석
-1. 조건 충족 횟수: {total_events}일
-👉 최근 5년간 전날 밤 나스닥이 1% 이상 상승하고, 그 영향으로 당일 아침 코스피가 갭상승(전일 종가보다 높게 시작)으로 출발한 총 일수입니다.
+■ 🌎 글로벌 시장 변동 (전일장 기준)
+- 나스닥 지수: {latest_ndx_return:.2f}%
+- 필라델피아 반도체: {latest_sox_return:.2f}%
 
-2. 갭상승 후 장중 양봉 마감 횟수: {success_events}일
-👉 위 조건으로 기분 좋게 출발한 날 중에서, 개장 직후 쏟아지는 차익실현 매물을 이겨내고 장 마감 때까지 시초가보다 높은 가격(양봉)을 유지한 일수입니다.
+■ 💰 코스피 최근 영업일 수급 동향 (순매수)
+- {investor_msg}
 
-3. 추세 유지 확률: {prob:.2f}%
-👉 코스피가 미국장 훈풍을 받아 갭상승 출발했을 때, 오후 마감까지 하락 반전하지 않고 상승 추세를 지켜낼 수 있는 통계적 확률입니다.
+■ 📊 엘리어트 파동 & 피보나치 분석 (최근 60영업일)
+- 코스피 현재가: {current_kospi:,.2f}
+- 단기 고점: {recent_kospi_high:,.2f} / 단기 저점: {recent_kospi_low:,.2f}
+- 현재 파동 위치: {trend_msg}
+  👉 상승 시 돌파 목표 (23.6%): {fib_236:,.2f}
+  👉 하락 시 1차 지지선 (38.2%): {fib_382:,.2f}
+  👉 하락 시 2차 지지선 (61.8%): {fib_618:,.2f}
 
-■ 🎯 오늘 장 전망
-전날 나스닥 등락률 : {latest_ndx_return:.2f}%
-오늘의 코스피 예상 등락률 : {expected_kospi_return:.2f}%
-(※ 예상 등락률은 과거 5년간 두 시장의 민감도(Beta)를 바탕으로 산출한 통계적 기대치입니다.)
+■ 🎯 오늘 장 통계적 전망 (최근 5년 데이터 기준)
+- 코스피 예상 등락률: {expected_kospi_return:.2f}%
+- 미국장 상승 연동 코스피 장중 양봉 유지 확률: {prob:.2f}%
+  (조건 충족 횟수: {total_events}일 중 {success_events}일 양봉 마감)
 """
 
 print("\n--- 분석 결과 ---")
 print(report_message)
 
-# 6. 구글 앱스 스크립트 웹훅으로 전송
+# 구글 앱스 스크립트 웹훅 URL (본인의 URL로 유지)
 webhook_url = "https://script.google.com/macros/s/AKfycbxDeelSjMDB1dD-Lsj2nRs8azQUb0TwDyGcSjCTHvtUqfHYbGb-q_pTB-PPyPvXZ-63kg/exec"
 
 payload = {
@@ -136,7 +193,6 @@ payload = {
 
 try:
     if "복사한_구글_웹앱_URL" not in webhook_url:
-        # UTF-8 인코딩 처리 추가
         response = requests.post(
             webhook_url, 
             headers={"Content-Type": "application/json; charset=utf-8"},
