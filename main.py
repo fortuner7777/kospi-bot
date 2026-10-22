@@ -7,6 +7,7 @@ import time
 import sys
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
+from io import StringIO
 
 # 1. 분석 기간 및 한국 시간(KST) 설정
 kst_now = datetime.utcnow() + timedelta(hours=9)
@@ -94,37 +95,37 @@ try:
 except Exception as e:
     print("수급 데이터 수집 실패 (기본값 처리)")
 
-# 5. 야간선물(사상최강) 크롤링 추가
+# 5. 야간선물(사상최강) 크롤링
 print("[4단계] 야간선물(사상최강) 데이터 수집...")
-night_futures_msg = "데이터 수집 실패 (사이트 구조 변경 또는 차단)"
+night_futures_msg = "데이터 수집 실패"
 try:
     url = "https://esignal.co.kr/kospi200-futures-night/"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     }
     res = requests.get(url, headers=headers, timeout=10)
     res.encoding = 'utf-8' 
     
     if res.status_code == 200:
-        # 사상최강 사이트 내의 '표(Table)' 구조를 모두 추출
-        tables = pd.read_html(res.text)
-        if tables:
-            # 첫 번째 표(상승/하락 목표가 테이블)를 가져와서 텍스트로 변환
-            nf_df = tables[0].fillna("")
+        html_io = StringIO(res.text)
+        tables = pd.read_html(html_io)
+        
+        target_df = None
+        for i, df in enumerate(tables):
+            df_str = df.to_string().replace(" ", "")
+            if any(keyword in df_str for keyword in ["상승", "하락", "저항", "지지", "목표"]):
+                if len(df) > 1 or len(df.columns) > 1:
+                    target_df = df.fillna("")
+                    break
+        
+        if target_df is not None:
             night_futures_msg = "\n"
-            
-            # 테이블 컬럼명 (상승 1차 | 상승 2차 등) 추출
-            cols = " | ".join(str(c) for c in nf_df.columns if "Unnamed" not in str(c))
-            if cols:
-                night_futures_msg += f"  > {cols}\n"
-                
-            # 테이블 수치(가격) 추출
-            for _, row in nf_df.iterrows():
+            for _, row in target_df.iterrows():
                 row_str = " | ".join([str(x) for x in row.values if str(x).strip() != ""])
                 night_futures_msg += f"  > {row_str}\n"
+            print("야간선물 목표가 데이터 수집 완료")
         else:
-            night_futures_msg = "표 데이터가 없습니다."
-        print("야간선물 데이터 수집 완료")
+            night_futures_msg = "페이지 내 목표가 표(Table)를 찾지 못했습니다."
     else:
         print(f"야간선물 접속 실패 (상태 코드: {res.status_code})")
 except Exception as e:
@@ -170,7 +171,7 @@ report_message = f"""
 
 분석 기준일: {kst_now.strftime('%Y-%m-%d')}
 
-■ 야간선물 지표 (사상최강 웹사이트 추출) {night_futures_msg}
+■ 야간선물 지표 (사상최강 목표가 추출) {night_futures_msg}
 ■ 글로벌 시장 변동 (전일장 기준)
 - 나스닥 지수: {latest_ndx_return:.2f}%
 - 필라델피아 반도체: {latest_sox_return:.2f}%
@@ -195,7 +196,7 @@ report_message = f"""
 print("\n--- 분석 결과 ---")
 print(report_message)
 
-# 구글 앱스 스크립트 웹훅 URL (본인의 URL)
+# 구글 앱스 스크립트 웹훅 URL
 webhook_url = "https://script.google.com/macros/s/AKfycbxDeelSjMDB1dD-Lsj2nRs8azQUb0TwDyGcSjCTHvtUqfHYbGb-q_pTB-PPyPvXZ-63kg/exec"
 
 payload = {
