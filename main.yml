@@ -21,7 +21,7 @@ jobs:
     - name: 필수 라이브러리 설치
       run: |
         python -m pip install --upgrade pip
-        pip install pandas yfinance pykrx requests beautifulsoup4 lxml cloudscraper
+        pip install pandas yfinance pykrx requests
         
     - name: 파이썬 스크립트 실행
       run: python main.py
