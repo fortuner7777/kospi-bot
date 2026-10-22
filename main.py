@@ -6,6 +6,7 @@ import json
 import time
 import sys
 from datetime import datetime, timedelta
+from investiny import historical_data # 인베스팅닷컴 라이브러리 추가
 
 # 1. 분석 기간 및 한국 시간(KST) 설정
 kst_now = datetime.utcnow() + timedelta(hours=9)
@@ -74,21 +75,25 @@ except Exception as e:
     print(f"미국 지수 수집 실패: {e}")
     sys.exit()
 
-# 4. 공식 코스피 200 야간선물 (E-mini KOSPI 200) 데이터 수집 [★안정성 강화 버전★]
+# 4. 인베스팅닷컴 기반 야간선물 데이터 수집 (안정성 극대화)
 print("[3단계] 공식 야간선물 데이터 수집...")
-night_futures_msg = "데이터 수집 지연 (Yahoo Finance 응답 없음)"
+night_futures_msg = "데이터 수집 지연 (Investing.com 접근 실패)"
 try:
-    # 날짜 지정 오류 방지를 위해 가장 최근 5일치 데이터를 직접 불러옵니다.
-    kf = yf.Ticker("KOS=F").history(period="5d")
+    # investing.com의 KOSPI 200 선물(investing ID: 8984) 데이터 요청
+    inv_start = (kst_now - timedelta(days=10)).strftime("%m/%d/%Y")
+    inv_end = (kst_now + timedelta(days=1)).strftime("%m/%d/%Y")
+    
+    data = historical_data(investing_id=8984, from_date=inv_start, to_date=inv_end)
+    kf = pd.DataFrame(data)
     
     if not kf.empty:
-        last_kf_close = kf['Close'].iloc[-1]
-        prev_kf_close = kf['Close'].iloc[-2] if len(kf) > 1 else last_kf_close
+        last_kf_close = kf['close'].iloc[-1]
+        prev_kf_close = kf['close'].iloc[-2] if len(kf) > 1 else last_kf_close
         kf_change_pct = ((last_kf_close - prev_kf_close) / prev_kf_close) * 100
         
         direction = "상승" if kf_change_pct > 0 else "하락" if kf_change_pct < 0 else "보합"
         night_futures_msg = f"종가 {last_kf_close:,.2f}pt ({direction} {kf_change_pct:+.2f}%)"
-        print("야간선물 데이터 수집 완료")
+        print("야간선물 데이터 수집 완료 (Investing.com)")
 except Exception as e:
     print(f"야간선물 수집 에러: {e}")
 
@@ -152,7 +157,7 @@ report_message = f"""
 분석 기준일: {kst_now.strftime('%Y-%m-%d')}
 
 ■ 글로벌 시장 변동 (전일장 기준)
-- E-mini 코스피200 야간선물: {night_futures_msg}
+- KOSPI 200 야간선물: {night_futures_msg}
 - 미국 나스닥 지수: {latest_ndx_return:+.2f}%
 - 필라델피아 반도체: {latest_sox_return:+.2f}%
 
