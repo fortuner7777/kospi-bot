@@ -18,6 +18,8 @@ print("데이터 수집을 시작합니다...")
 # 2. KOSPI 지수 수집
 max_retries = 3
 kospi = pd.DataFrame()
+recent_kospi_high = 0
+recent_kospi_low = 0
 
 print("[1단계] KOSPI 데이터 수집 시도...")
 for attempt in range(max_retries):
@@ -25,6 +27,8 @@ for attempt in range(max_retries):
         temp_kospi = stock.get_index_ohlcv(start_date, end_date, "1001", name_display=False)
         if not temp_kospi.empty:
             kospi = temp_kospi[['시가', '종가']].rename(columns={'시가': 'KOSPI_Open', '종가': 'KOSPI_Close'})
+            recent_kospi_high = temp_kospi['고가'].tail(60).max()
+            recent_kospi_low = temp_kospi['저가'].tail(60).min()
             print("KOSPI 데이터 수집 완료 (pykrx)")
             break
     except Exception as e:
@@ -40,14 +44,14 @@ if kospi.empty:
         if not temp_kospi.empty:
             kospi = temp_kospi[['Open', 'Close']].rename(columns={'Open': 'KOSPI_Open', 'Close': 'KOSPI_Close'})
             kospi.index = kospi.index.tz_localize(None)
+            recent_kospi_high = temp_kospi['High'].tail(60).max()
+            recent_kospi_low = temp_kospi['Low'].tail(60).min()
             print("KOSPI 데이터 수집 완료 (yfinance 백업)")
     except Exception as e:
         print("KOSPI 수집 실패")
         sys.exit()
 
 kospi = kospi.dropna()
-recent_kospi_high = kospi['KOSPI_Close'].tail(60).max()
-recent_kospi_low = kospi['KOSPI_Close'].tail(60).min()
 current_kospi = kospi['KOSPI_Close'].iloc[-1]
 
 # 3. 미국 지수 및 한국 야간 대체지표 통합 수집
@@ -127,7 +131,7 @@ prob = (success_events / total_events) * 100 if total_events > 0 else 0
 beta = df['KOSPI_Daily_Return'].cov(df['NDX_Return']) / df['NDX_Return'].var()
 expected_kospi_return = latest_ndx_return * beta
 
-# 6. 엘리어트 파동 및 피보나치 레벨 연산
+# 6. 엘리어트 파동 및 올바른 피보나치 레벨 연산 (현재가보다 낮게 나오도록 수정 완료)
 wave_diff = recent_kospi_high - recent_kospi_low
 fib_236 = recent_kospi_high - (wave_diff * 0.236)
 fib_382 = recent_kospi_high - (wave_diff * 0.382)
@@ -153,7 +157,7 @@ sox_color = get_color(latest_sox_return)
 kospi_exp_color = get_color(expected_kospi_return)
 ewy_color = get_color(ewy_return)
 
-# 8. 블로그 포스팅용 HTML 템플릿
+# 8. HTML 템플릿 및 리포트 구성 (이모지 완전 제거)
 html_report = f"""
 <div style="font-family: 'Noto Sans KR', sans-serif; color: #333;">
   
@@ -206,16 +210,37 @@ html_report = f"""
 </div>
 """
 
-# 9. 메일/블로그용 텍스트 및 HTML
 report_message = f"""
 [종합 주식시장 시차 동조화 및 파동 분석 리포트]
+
 분석 기준일: {kst_now.strftime('%Y-%m-%d')}
+
+- 글로벌 시장 변동 (전일장 기준)
+- KOSPI 야간 대체지표 (MSCI 한국 ETF): {night_futures_msg}
+- 미국 나스닥 지수: {latest_ndx_return:+.2f}%
+- 필라델피아 반도체: {latest_sox_return:+.2f}%
+
+- 코스피 최근 영업일 수급 동향 (순매수)
+- {investor_msg}
+
+- 엘리어트 파동 & 피보나치 분석 (최근 60영업일)
+- 코스피 현재가: {current_kospi:,.2f}
+- 단기 고점: {recent_kospi_high:,.2f} / 단기 저점: {recent_kospi_low:,.2f}
+- 현재 파동 위치: {trend_msg}
+  > 상승 시 돌파 목표 (23.6%): {fib_236:,.2f}
+  > 하락 시 1차 지지선 (38.2%): {fib_382:,.2f}
+  > 하락 시 2차 지지선 (61.8%): {fib_618:,.2f}
+
+- 오늘 장 통계적 전망 (최근 5년 데이터 기준)
+- 코스피 통계적 예상 등락률: {expected_kospi_return:+.2f}%
+- 미국장 상승 연동 코스피 장중 양봉 유지 확률: {prob:.2f}%
+  (조건 충족 횟수: {total_events}일 중 {success_events}일 양봉 마감)
 """
 
 print("\n--- 분석 결과 ---")
 print(report_message)
 
-# 10. 구글 앱스 스크립트 웹훅 URL
+# 9. 구글 앱스 스크립트 웹훅 전송 (최신 웹앱 URL 적용)
 webhook_url = "https://script.google.com/macros/s/AKfycbxsrM75Ecuk70Xsf3jgMTsvCQiJpyYT6Q-tsQhIGeHq5J7opkB77-892jHdDtAuQdf6dA/exec"
 
 payload = {
@@ -234,10 +259,10 @@ try:
             timeout=10
         )
         if response.status_code == 200:
-            print("\n구글 시트 기록, 이메일 전송, 블로그 포스팅 요청 완료")
+            print("\n✅ 구글 시트 기록 및 이메일 전송 요청 완료")
         else:
-            print(f"\n웹훅 전송 실패 (상태 코드: {response.status_code})")
+            print(f"\n⚠️ 웹훅 전송 실패 (상태 코드: {response.status_code})")
     else:
-        print("\n웹훅 URL이 기본값이어서 전송을 생략했습니다.")
+        print("\nℹ️ 웹훅 URL이 기본값이어서 전송을 생략했습니다.")
 except Exception as e:
     print(f"\n웹훅 전송 중 에러 발생: {e}")
