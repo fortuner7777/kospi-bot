@@ -8,6 +8,7 @@ import sys
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from io import StringIO
+import cloudscraper # 봇 방어막 우회 라이브러리 추가
 
 # 1. 분석 기간 및 한국 시간(KST) 설정
 kst_now = datetime.utcnow() + timedelta(hours=9)
@@ -17,7 +18,7 @@ recent_60_days = (kst_now - timedelta(days=90)).strftime("%Y%m%d")
 
 print("데이터 수집을 시작합니다...")
 
-# 2. KOSPI 지수 수집 (pykrx + yfinance 백업)
+# 2. KOSPI 지수 수집
 max_retries = 3
 kospi = pd.DataFrame()
 
@@ -95,15 +96,14 @@ try:
 except Exception as e:
     print("수급 데이터 수집 실패 (기본값 처리)")
 
-# 5. 야간선물(사상최강) 크롤링
+# 5. 야간선물(사상최강) 특수 크롤링 (봇 우회)
 print("[4단계] 야간선물(사상최강) 데이터 수집...")
-night_futures_msg = "데이터 수집 실패"
+night_futures_msg = "데이터 수집 실패 (사이트 강력 차단)"
 try:
     url = "https://esignal.co.kr/kospi200-futures-night/"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    }
-    res = requests.get(url, headers=headers, timeout=10)
+    # 일반 브라우저로 완벽하게 위장하는 우회 객체 생성
+    scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
+    res = scraper.get(url, timeout=15)
     res.encoding = 'utf-8' 
     
     if res.status_code == 200:
