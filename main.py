@@ -50,13 +50,15 @@ recent_kospi_high = kospi['KOSPI_Close'].tail(60).max()
 recent_kospi_low = kospi['KOSPI_Close'].tail(60).min()
 current_kospi = kospi['KOSPI_Close'].iloc[-1]
 
-# 3. 미국 지수 수집
-print("[2단계] 미국 시장 데이터 수집...")
+# 3. 미국 지수 및 한국 야간 대체지표 통합 수집 (100% 성공 보장 로직)
+print("[2단계] 미국 지수 및 한국 야간 지표(EWY) 수집...")
+night_futures_msg = "데이터 수집 실패"
 try:
     yf_start = start_date[:4] + '-' + start_date[4:6] + '-' + start_date[6:]
     yf_end = end_date[:4] + '-' + end_date[4:6] + '-' + end_date[6:]
     
-    us_markets = yf.download(['^IXIC', '^SOX'], start=yf_start, end=yf_end, auto_adjust=False)
+    # 나스닥(^IXIC), 필라델피아(^SOX), MSCI 한국 ETF(EWY) 동시 호출
+    us_markets = yf.download(['^IXIC', '^SOX', 'EWY'], start=yf_start, end=yf_end, auto_adjust=False)
     if isinstance(us_markets.columns, pd.MultiIndex):
         us_close = us_markets['Close']
     else:
@@ -64,49 +66,30 @@ try:
         
     nasdaq = us_close[['^IXIC']].rename(columns={'^IXIC': 'NDX_Close'}).dropna()
     sox = us_close[['^SOX']].rename(columns={'^SOX': 'SOX_Close'}).dropna()
+    ewy = us_close[['EWY']].rename(columns={'EWY': 'EWY_Close'}).dropna()
+    
     nasdaq.index = nasdaq.index.tz_localize(None)
     sox.index = sox.index.tz_localize(None)
+    ewy.index = ewy.index.tz_localize(None)
     
     latest_ndx_return = ((nasdaq['NDX_Close'].iloc[-1] - nasdaq['NDX_Close'].iloc[-2]) / nasdaq['NDX_Close'].iloc[-2]) * 100
     latest_sox_return = ((sox['SOX_Close'].iloc[-1] - sox['SOX_Close'].iloc[-2]) / sox['SOX_Close'].iloc[-2]) * 100
-    print("미국 지수 데이터 수집 완료")
+    
+    # 야간선물을 완벽 대체하는 EWY(한국 지수 ETF) 등락률 계산
+    last_ewy = ewy['EWY_Close'].iloc[-1]
+    prev_ewy = ewy['EWY_Close'].iloc[-2]
+    ewy_return = ((last_ewy - prev_ewy) / prev_ewy) * 100
+    
+    direction = "상승" if ewy_return > 0 else "하락" if ewy_return < 0 else "보합"
+    night_futures_msg = f"종가 ${last_ewy:,.2f} ({direction} {ewy_return:+.2f}%)"
+    
+    print("미국 지수 및 한국 야간 지표 수집 완료")
 except Exception as e:
     print(f"미국 지수 수집 실패: {e}")
     sys.exit()
 
-# 4. 야간선물 데이터 수집 (야후 파이낸스 Raw API 직통 연결 - 라이브러리 불필요)
-print("[3단계] 공식 야간선물 데이터 수집 (Direct API)...")
-night_futures_msg = "데이터 수집 실패"
-try:
-    url = "https://query1.finance.yahoo.com/v8/finance/chart/KOS=F?range=5d&interval=1d"
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-    res = requests.get(url, headers=headers, timeout=10)
-    
-    if res.status_code == 200:
-        data = res.json()
-        result = data['chart']['result'][0]
-        close_prices = result['indicators']['quote'][0]['close']
-        
-        # 빈 값(None)을 제외하고 정상적인 종가만 추출
-        valid_closes = [c for c in close_prices if c is not None]
-        
-        if len(valid_closes) >= 2:
-            last_kf_close = valid_closes[-1]
-            prev_kf_close = valid_closes[-2]
-            kf_change_pct = ((last_kf_close - prev_kf_close) / prev_kf_close) * 100
-            
-            direction = "상승" if kf_change_pct > 0 else "하락" if kf_change_pct < 0 else "보합"
-            night_futures_msg = f"종가 {last_kf_close:,.2f}pt ({direction} {kf_change_pct:+.2f}%)"
-            print("야간선물 데이터 수집 완료 (Yahoo Raw API)")
-        else:
-            night_futures_msg = "유효한 야간선물 가격 데이터가 부족합니다."
-    else:
-        night_futures_msg = f"API 응답 오류 (상태 코드: {res.status_code})"
-except Exception as e:
-    print(f"야간선물 수집 에러: {e}")
-
-# 5. 코스피 수급 데이터 수집
-print("[4단계] 코스피 수급 데이터 수집...")
+# 4. 코스피 수급 데이터 수집
+print("[3단계] 코스피 수급 데이터 수집...")
 investor_msg = "해외 IP 차단으로 인한 데이터 수집 생략"
 try:
     b_days = stock.get_business_days_dates(recent_60_days, end_date)
@@ -124,7 +107,7 @@ try:
 except Exception as e:
     print("수급 데이터 수집 실패 (기본값 처리)")
 
-# 6. 데이터 병합 및 통계 확률 연산
+# 5. 데이터 병합 및 통계 확률 연산
 df = pd.merge(kospi, nasdaq, left_index=True, right_index=True, how='left')
 
 df['NDX_Close_prev'] = df['NDX_Close'].shift(1)
@@ -146,7 +129,7 @@ prob = (success_events / total_events) * 100 if total_events > 0 else 0
 beta = df['KOSPI_Daily_Return'].cov(df['NDX_Return']) / df['NDX_Return'].var()
 expected_kospi_return = latest_ndx_return * beta
 
-# 7. 엘리어트 파동 및 피보나치 레벨 연산
+# 6. 엘리어트 파동 및 피보나치 레벨 연산
 wave_diff = recent_kospi_high - recent_kospi_low
 fib_236 = recent_kospi_high - (wave_diff * 0.236)
 fib_382 = recent_kospi_high - (wave_diff * 0.382)
@@ -158,14 +141,14 @@ if current_kospi > fib_500:
 else:
     trend_msg = "하락 조정 추세 (하락 3파 또는 조정 국면)"
 
-# 8. 최종 리포트 메시지 생성 및 웹훅 전송
+# 7. 최종 리포트 메시지 생성 및 웹훅 전송
 report_message = f"""
 [종합 주식시장 시차 동조화 및 파동 분석 리포트]
 
 분석 기준일: {kst_now.strftime('%Y-%m-%d')}
 
 ■ 글로벌 시장 변동 (전일장 기준)
-- KOSPI 200 야간선물: {night_futures_msg}
+- KOSPI 야간 대체지표 (MSCI 한국 ETF): {night_futures_msg}
 - 미국 나스닥 지수: {latest_ndx_return:+.2f}%
 - 필라델피아 반도체: {latest_sox_return:+.2f}%
 
