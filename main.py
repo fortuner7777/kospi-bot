@@ -131,7 +131,7 @@ prob = (success_events / total_events) * 100 if total_events > 0 else 0
 beta = df['KOSPI_Daily_Return'].cov(df['NDX_Return']) / df['NDX_Return'].var()
 expected_kospi_return = latest_ndx_return * beta
 
-# 6. 엘리어트 파동 및 올바른 피보나치 레벨 연산 (현재가보다 낮게 나오도록 수정 완료)
+# 6. 엘리어트 파동 및 피보나치 레벨 연산 (현재가 기준 저항/지지 동적 분류)
 wave_diff = recent_kospi_high - recent_kospi_low
 fib_236 = recent_kospi_high - (wave_diff * 0.236)
 fib_382 = recent_kospi_high - (wave_diff * 0.382)
@@ -142,6 +142,17 @@ if current_kospi > fib_500:
     trend_msg = "상승 추세 (상승 5파 진행 또는 눌림목 구간)"
 else:
     trend_msg = "하락 조정 추세 (하락 3파 또는 조정 국면)"
+
+# 현재가와 비교하여 저항선과 지지선 동적 라벨링 함수
+def classify_level(name, val):
+    if val > current_kospi:
+        return f"{name} (저항): {val:,.2f}"
+    else:
+        return f"{name} (지지): {val:,.2f}"
+
+res_236 = classify_level("돌파 목표 (23.6%)", fib_236)
+sup_382 = classify_level("1차 지지선 (38.2%)", fib_382)
+sup_618 = classify_level("2차 지지선 (61.8%)", fib_618)
 
 # 7. 등락률에 따른 색상 결정 헬퍼 함수
 def get_color(val):
@@ -157,7 +168,7 @@ sox_color = get_color(latest_sox_return)
 kospi_exp_color = get_color(expected_kospi_return)
 ewy_color = get_color(ewy_return)
 
-# 8. HTML 템플릿 및 리포트 구성 (이모지 완전 제거)
+# 8. HTML 템플릿
 html_report = f"""
 <div style="font-family: 'Noto Sans KR', sans-serif; color: #333;">
   
@@ -188,9 +199,9 @@ html_report = f"""
     <p style="margin-top:0;"><strong>수급 동향 (순매수):</strong> <span style="color:#007bff;">{investor_msg}</span></p>
     <p><strong>현재 파동 위치:</strong> {trend_msg} (코스피 현재가: <strong>{current_kospi:,.2f}</strong>)</p>
     <ul style="line-height: 1.8; margin-bottom:0;">
-      <li><strong>상승 시 돌파 목표 (23.6%):</strong> <span style="color: #e83e8c; font-weight: 700;">{fib_236:,.2f}</span></li>
-      <li><strong>하락 시 1차 지지선 (38.2%):</strong> <span style="color: #007bff; font-weight: 700;">{fib_382:,.2f}</span></li>
-      <li><strong>하락 시 2차 지지선 (61.8%):</strong> <span style="color: #007bff; font-weight: 700;">{fib_618:,.2f}</span></li>
+      <li><strong>{res_236}</strong></li>
+      <li><strong>{sup_382}</strong></li>
+      <li><strong>{sup_618}</strong></li>
     </ul>
   </div>
 
@@ -227,9 +238,9 @@ report_message = f"""
 - 코스피 현재가: {current_kospi:,.2f}
 - 단기 고점: {recent_kospi_high:,.2f} / 단기 저점: {recent_kospi_low:,.2f}
 - 현재 파동 위치: {trend_msg}
-  > 상승 시 돌파 목표 (23.6%): {fib_236:,.2f}
-  > 하락 시 1차 지지선 (38.2%): {fib_382:,.2f}
-  > 하락 시 2차 지지선 (61.8%): {fib_618:,.2f}
+  > {res_236}
+  > {sup_382}
+  > {sup_618}
 
 - 오늘 장 통계적 전망 (최근 5년 데이터 기준)
 - 코스피 통계적 예상 등락률: {expected_kospi_return:+.2f}%
@@ -240,7 +251,7 @@ report_message = f"""
 print("\n--- 분석 결과 ---")
 print(report_message)
 
-# 9. 구글 앱스 스크립트 웹훅 전송 (최신 웹앱 URL 적용)
+# 9. 구글 앱스 스크립트 웹훅 전송
 webhook_url = "https://script.google.com/macros/s/AKfycbxsrM75Ecuk70Xsf3jgMTsvCQiJpyYT6Q-tsQhIGeHq5J7opkB77-892jHdDtAuQdf6dA/exec"
 
 payload = {
@@ -266,3 +277,4 @@ try:
         print("\nℹ️ 웹훅 URL이 기본값이어서 전송을 생략했습니다.")
 except Exception as e:
     print(f"\n웹훅 전송 중 에러 발생: {e}")
+```[cite: 50]
