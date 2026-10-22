@@ -232,7 +232,7 @@ print("\n--- 분석 결과 ---")
 print(report_message)
 
 # 10. 구글 앱스 스크립트 웹훅 URL
-webhook_url = "https://script.google.com/macros/s/AKfycbxDeelSjMDB1dD-Lsj2nRs8azQUb0TwDyGcSjCTHvtUqfHYbGb-q_pTB-PPyPvXZ-63kg/exec"
+webhook_url = "https://script.google.com/macros/s/AKfycbxsrM75Ecuk70Xsf3jgMTsvCQiJpyYT6Q-tsQhIGeHq5J7opkB77-892jHdDtAuQdf6dA/exec"
 
 payload = {
     "date": kst_now.strftime("%Y-%m-%d"),
