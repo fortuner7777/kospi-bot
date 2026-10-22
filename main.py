@@ -6,6 +6,7 @@ import json
 import time
 import sys
 from datetime import datetime, timedelta
+from bs4 import BeautifulSoup
 
 # 1. 분석 기간 및 한국 시간(KST) 설정
 kst_now = datetime.utcnow() + timedelta(hours=9)
@@ -45,13 +46,12 @@ if kospi.empty:
         print("KOSPI 수집 실패")
         sys.exit()
 
-# 빈 값(NaN) 제거 및 코스피 현재가, 고점/저점 추출
 kospi = kospi.dropna()
 recent_kospi_high = kospi['KOSPI_Close'].tail(60).max()
 recent_kospi_low = kospi['KOSPI_Close'].tail(60).min()
 current_kospi = kospi['KOSPI_Close'].iloc[-1]
 
-# 3. 미국 지수 수집 (NASDAQ & SOX 반도체)
+# 3. 미국 지수 수집
 print("[2단계] 미국 시장 데이터 수집...")
 try:
     yf_start = start_date[:4] + '-' + start_date[4:6] + '-' + start_date[6:]
@@ -75,7 +75,7 @@ except Exception as e:
     print(f"미국 지수 수집 실패: {e}")
     sys.exit()
 
-# 4. 코스피 투자자별 수급 수집 (최근 영업일)
+# 4. 코스피 수급 데이터 수집
 print("[3단계] 코스피 수급 데이터 수집...")
 investor_msg = "해외 IP 차단으로 인한 데이터 수집 생략"
 try:
@@ -94,7 +94,43 @@ try:
 except Exception as e:
     print("수급 데이터 수집 실패 (기본값 처리)")
 
-# 5. 데이터 병합 및 통계 확률 연산
+# 5. 야간선물(사상최강) 크롤링 추가
+print("[4단계] 야간선물(사상최강) 데이터 수집...")
+night_futures_msg = "데이터 수집 실패 (사이트 구조 변경 또는 차단)"
+try:
+    url = "https://esignal.co.kr/kospi200-futures-night/"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36"
+    }
+    res = requests.get(url, headers=headers, timeout=10)
+    res.encoding = 'utf-8' 
+    
+    if res.status_code == 200:
+        # 사상최강 사이트 내의 '표(Table)' 구조를 모두 추출
+        tables = pd.read_html(res.text)
+        if tables:
+            # 첫 번째 표(상승/하락 목표가 테이블)를 가져와서 텍스트로 변환
+            nf_df = tables[0].fillna("")
+            night_futures_msg = "\n"
+            
+            # 테이블 컬럼명 (상승 1차 | 상승 2차 등) 추출
+            cols = " | ".join(str(c) for c in nf_df.columns if "Unnamed" not in str(c))
+            if cols:
+                night_futures_msg += f"  > {cols}\n"
+                
+            # 테이블 수치(가격) 추출
+            for _, row in nf_df.iterrows():
+                row_str = " | ".join([str(x) for x in row.values if str(x).strip() != ""])
+                night_futures_msg += f"  > {row_str}\n"
+        else:
+            night_futures_msg = "표 데이터가 없습니다."
+        print("야간선물 데이터 수집 완료")
+    else:
+        print(f"야간선물 접속 실패 (상태 코드: {res.status_code})")
+except Exception as e:
+    print(f"야간선물 수집 에러: {e}")
+
+# 6. 데이터 병합 및 통계 확률 연산
 df = pd.merge(kospi, nasdaq, left_index=True, right_index=True, how='left')
 
 df['NDX_Close_prev'] = df['NDX_Close'].shift(1)
@@ -116,7 +152,7 @@ prob = (success_events / total_events) * 100 if total_events > 0 else 0
 beta = df['KOSPI_Daily_Return'].cov(df['NDX_Return']) / df['NDX_Return'].var()
 expected_kospi_return = latest_ndx_return * beta
 
-# 6. 엘리어트 파동 및 피보나치 레벨 연산
+# 7. 엘리어트 파동 및 피보나치 레벨 연산
 wave_diff = recent_kospi_high - recent_kospi_low
 fib_236 = recent_kospi_high - (wave_diff * 0.236)
 fib_382 = recent_kospi_high - (wave_diff * 0.382)
@@ -128,12 +164,13 @@ if current_kospi > fib_500:
 else:
     trend_msg = "하락 조정 추세 (하락 3파 또는 조정 국면)"
 
-# 7. 최종 리포트 메시지 생성 및 웹훅 전송
+# 8. 최종 리포트 메시지 생성 및 웹훅 전송
 report_message = f"""
 [종합 주식시장 시차 동조화 및 파동 분석 리포트]
 
 분석 기준일: {kst_now.strftime('%Y-%m-%d')}
 
+■ 야간선물 지표 (사상최강 웹사이트 추출) {night_futures_msg}
 ■ 글로벌 시장 변동 (전일장 기준)
 - 나스닥 지수: {latest_ndx_return:.2f}%
 - 필라델피아 반도체: {latest_sox_return:.2f}%
@@ -158,6 +195,7 @@ report_message = f"""
 print("\n--- 분석 결과 ---")
 print(report_message)
 
+# 구글 앱스 스크립트 웹훅 URL (본인의 URL)
 webhook_url = "https://script.google.com/macros/s/AKfycbxDeelSjMDB1dD-Lsj2nRs8azQUb0TwDyGcSjCTHvtUqfHYbGb-q_pTB-PPyPvXZ-63kg/exec"
 
 payload = {
