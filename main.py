@@ -6,7 +6,6 @@ import json
 import time
 import sys
 from datetime import datetime, timedelta
-from investiny import historical_data # 인베스팅닷컴 라이브러리 추가
 
 # 1. 분석 기간 및 한국 시간(KST) 설정
 kst_now = datetime.utcnow() + timedelta(hours=9)
@@ -75,25 +74,34 @@ except Exception as e:
     print(f"미국 지수 수집 실패: {e}")
     sys.exit()
 
-# 4. 인베스팅닷컴 기반 야간선물 데이터 수집 (안정성 극대화)
-print("[3단계] 공식 야간선물 데이터 수집...")
-night_futures_msg = "데이터 수집 지연 (Investing.com 접근 실패)"
+# 4. 야간선물 데이터 수집 (야후 파이낸스 Raw API 직통 연결 - 라이브러리 불필요)
+print("[3단계] 공식 야간선물 데이터 수집 (Direct API)...")
+night_futures_msg = "데이터 수집 실패"
 try:
-    # investing.com의 KOSPI 200 선물(investing ID: 8984) 데이터 요청
-    inv_start = (kst_now - timedelta(days=10)).strftime("%m/%d/%Y")
-    inv_end = (kst_now + timedelta(days=1)).strftime("%m/%d/%Y")
+    url = "https://query1.finance.yahoo.com/v8/finance/chart/KOS=F?range=5d&interval=1d"
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    res = requests.get(url, headers=headers, timeout=10)
     
-    data = historical_data(investing_id=8984, from_date=inv_start, to_date=inv_end)
-    kf = pd.DataFrame(data)
-    
-    if not kf.empty:
-        last_kf_close = kf['close'].iloc[-1]
-        prev_kf_close = kf['close'].iloc[-2] if len(kf) > 1 else last_kf_close
-        kf_change_pct = ((last_kf_close - prev_kf_close) / prev_kf_close) * 100
+    if res.status_code == 200:
+        data = res.json()
+        result = data['chart']['result'][0]
+        close_prices = result['indicators']['quote'][0]['close']
         
-        direction = "상승" if kf_change_pct > 0 else "하락" if kf_change_pct < 0 else "보합"
-        night_futures_msg = f"종가 {last_kf_close:,.2f}pt ({direction} {kf_change_pct:+.2f}%)"
-        print("야간선물 데이터 수집 완료 (Investing.com)")
+        # 빈 값(None)을 제외하고 정상적인 종가만 추출
+        valid_closes = [c for c in close_prices if c is not None]
+        
+        if len(valid_closes) >= 2:
+            last_kf_close = valid_closes[-1]
+            prev_kf_close = valid_closes[-2]
+            kf_change_pct = ((last_kf_close - prev_kf_close) / prev_kf_close) * 100
+            
+            direction = "상승" if kf_change_pct > 0 else "하락" if kf_change_pct < 0 else "보합"
+            night_futures_msg = f"종가 {last_kf_close:,.2f}pt ({direction} {kf_change_pct:+.2f}%)"
+            print("야간선물 데이터 수집 완료 (Yahoo Raw API)")
+        else:
+            night_futures_msg = "유효한 야간선물 가격 데이터가 부족합니다."
+    else:
+        night_futures_msg = f"API 응답 오류 (상태 코드: {res.status_code})"
 except Exception as e:
     print(f"야간선물 수집 에러: {e}")
 
