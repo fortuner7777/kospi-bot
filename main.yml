@@ -2,8 +2,6 @@ name: Daily KOSPI Predict Bot
 
 on:
   schedule:
-    # 한국 시간(KST) 오전 8시 23분 실행 (트래픽 회피)
-    # = UTC 시간 일~목 밤 23시 23분
     - cron: '23 23 * * 0-4'
   workflow_dispatch: 
 
@@ -23,7 +21,7 @@ jobs:
     - name: 필수 라이브러리 설치
       run: |
         python -m pip install --upgrade pip
-        pip install pandas yfinance pykrx requests
+        pip install pandas yfinance pykrx requests beautifulsoup4 lxml
         
     - name: 파이썬 스크립트 실행
       run: python main.py
