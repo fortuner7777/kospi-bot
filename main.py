@@ -131,14 +131,38 @@ prob = (success_events / total_events) * 100 if total_events > 0 else 0
 beta = df['KOSPI_Daily_Return'].cov(df['NDX_Return']) / df['NDX_Return'].var()
 expected_kospi_return = latest_ndx_return * beta
 
-# 6. 엘리어트 파동 및 올바른 피보나치 레벨 연산 (현재가보다 낮게 나오도록 수정 완료)
+# 6. 엘리어트 파동 및 동적 피보나치 레벨 연산 (현재가 기준 근접 지지/저항 추적)
 wave_diff = recent_kospi_high - recent_kospi_low
-fib_236 = recent_kospi_high - (wave_diff * 0.236)
-fib_382 = recent_kospi_high - (wave_diff * 0.382)
-fib_500 = recent_kospi_high - (wave_diff * 0.500)
-fib_618 = recent_kospi_high - (wave_diff * 0.618)
 
-if current_kospi > fib_500:
+fib_levels = {
+    "고점 (0%)": recent_kospi_high,
+    "23.6%": recent_kospi_high - (wave_diff * 0.236),
+    "38.2%": recent_kospi_high - (wave_diff * 0.382),
+    "중심선 (50.0%)": recent_kospi_high - (wave_diff * 0.500),
+    "61.8%": recent_kospi_high - (wave_diff * 0.618),
+    "78.6%": recent_kospi_high - (wave_diff * 0.786),
+    "저점 (100%)": recent_kospi_low,
+    "하락 확장 (161.8%)": recent_kospi_high - (wave_diff * 1.618)
+}
+
+# 가격순 내림차순 정렬
+sorted_fib = sorted(fib_levels.items(), key=lambda x: x[1], reverse=True)
+
+# 현재가 기준 상단(저항)과 하단(지지) 분리
+resistances = [(k, v) for k, v in sorted_fib if v > current_kospi]
+supports = [(k, v) for k, v in sorted_fib if v <= current_kospi]
+
+# 가장 가까운 저항선 최대 2개 추출 (역순 정렬)
+near_res = resistances[-2:] if len(resistances) >= 2 else resistances
+near_res.reverse()
+
+# 가장 가까운 지지선 최대 2개 추출
+near_sup = supports[:2]
+
+res_html = "".join([f"<li><strong>돌파 목표 ({k}) [저항]:</strong> <span style='color: #e83e8c;'>{v:,.2f}</span></li>" for k, v in near_res])
+sup_html = "".join([f"<li><strong>방어 목표 ({k}) [지지]:</strong> <span style='color: #007bff;'>{v:,.2f}</span></li>" for k, v in near_sup])
+
+if current_kospi > fib_levels["중심선 (50.0%)"]:
     trend_msg = "상승 추세 (상승 5파 진행 또는 눌림목 구간)"
 else:
     trend_msg = "하락 조정 추세 (하락 3파 또는 조정 국면)"
@@ -146,18 +170,18 @@ else:
 # 7. 등락률에 따른 색상 결정 헬퍼 함수
 def get_color(val):
     if val > 0:
-        return "#e83e8c" # 상승(빨강계열)
+        return "#e83e8c"
     elif val < 0:
-        return "#007bff" # 하락(파랑계열)
+        return "#007bff"
     else:
-        return "#333333" # 보합(검정계열)
+        return "#333333"
 
 ndx_color = get_color(latest_ndx_return)
 sox_color = get_color(latest_sox_return)
 kospi_exp_color = get_color(expected_kospi_return)
 ewy_color = get_color(ewy_return)
 
-# 8. HTML 템플릿 및 리포트 구성 (이모지 완전 제거)
+# 8. HTML 템플릿 (블로거 호환성 향상을 위해 간결한 태그 적용)
 html_report = f"""
 <div style="font-family: 'Noto Sans KR', sans-serif; color: #333;">
   
@@ -187,10 +211,10 @@ html_report = f"""
   <div style="background-color: #f8f9fa; border-radius: 8px; padding: 20px; margin-bottom: 30px; font-size: 15px;">
     <p style="margin-top:0;"><strong>수급 동향 (순매수):</strong> <span style="color:#007bff;">{investor_msg}</span></p>
     <p><strong>현재 파동 위치:</strong> {trend_msg} (코스피 현재가: <strong>{current_kospi:,.2f}</strong>)</p>
+    <p style="font-size: 13px; color: #555; margin-bottom: 5px;">(최근 60영업일 단기 고점: {recent_kospi_high:,.2f} / 단기 저점: {recent_kospi_low:,.2f})</p>
     <ul style="line-height: 1.8; margin-bottom:0;">
-      <li><strong>상승 시 돌파 목표 (23.6%):</strong> <span style="color: #e83e8c; font-weight: 700;">{fib_236:,.2f}</span></li>
-      <li><strong>하락 시 1차 지지선 (38.2%):</strong> <span style="color: #007bff; font-weight: 700;">{fib_382:,.2f}</span></li>
-      <li><strong>하락 시 2차 지지선 (61.8%):</strong> <span style="color: #007bff; font-weight: 700;">{fib_618:,.2f}</span></li>
+      {res_html}
+      {sup_html}
     </ul>
   </div>
 
@@ -210,37 +234,14 @@ html_report = f"""
 </div>
 """
 
-report_message = f"""
-[종합 주식시장 시차 동조화 및 파동 분석 리포트]
+print("\n--- 분석 결과 (HTML 렌더링 전) ---")
+print("고점:", recent_kospi_high, "/ 저점:", recent_kospi_low, "/ 현재가:", current_kospi)
+for k, v in near_res:
+    print(f"[저항] {k}: {v:,.2f}")
+for k, v in near_sup:
+    print(f"[지지] {k}: {v:,.2f}")
 
-분석 기준일: {kst_now.strftime('%Y-%m-%d')}
-
-- 글로벌 시장 변동 (전일장 기준)
-- KOSPI 야간 대체지표 (MSCI 한국 ETF): {night_futures_msg}
-- 미국 나스닥 지수: {latest_ndx_return:+.2f}%
-- 필라델피아 반도체: {latest_sox_return:+.2f}%
-
-- 코스피 최근 영업일 수급 동향 (순매수)
-- {investor_msg}
-
-- 엘리어트 파동 & 피보나치 분석 (최근 60영업일)
-- 코스피 현재가: {current_kospi:,.2f}
-- 단기 고점: {recent_kospi_high:,.2f} / 단기 저점: {recent_kospi_low:,.2f}
-- 현재 파동 위치: {trend_msg}
-  > 상승 시 돌파 목표 (23.6%): {fib_236:,.2f}
-  > 하락 시 1차 지지선 (38.2%): {fib_382:,.2f}
-  > 하락 시 2차 지지선 (61.8%): {fib_618:,.2f}
-
-- 오늘 장 통계적 전망 (최근 5년 데이터 기준)
-- 코스피 통계적 예상 등락률: {expected_kospi_return:+.2f}%
-- 미국장 상승 연동 코스피 장중 양봉 유지 확률: {prob:.2f}%
-  (조건 충족 횟수: {total_events}일 중 {success_events}일 양봉 마감)
-"""
-
-print("\n--- 분석 결과 ---")
-print(report_message)
-
-# 9. 구글 앱스 스크립트 웹훅 전송 (최신 웹앱 URL 적용)
+# 9. 구글 앱스 스크립트 웹훅 전송
 webhook_url = "https://script.google.com/macros/s/AKfycbxsrM75Ecuk70Xsf3jgMTsvCQiJpyYT6Q-tsQhIGeHq5J7opkB77-892jHdDtAuQdf6dA/exec"
 
 payload = {
