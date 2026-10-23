@@ -27,3 +27,8 @@ jobs:
         
     - name: 파이썬 스크립트 실행
       run: python main.py
+
+    - name: 파이썬 스크립트 실행
+      env:
+        DATA_GO_KR_KEY: ${{ secrets.DATA_GO_KR_KEY }}
+      run: python main.py
