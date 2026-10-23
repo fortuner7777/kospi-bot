@@ -5,7 +5,9 @@ import requests
 import json
 import time
 import sys
+import os
 from datetime import datetime, timedelta
+import xml.etree.ElementTree as ET
 
 # 1. 분석 기간 및 한국 시간(KST) 설정
 kst_now = datetime.utcnow() + timedelta(hours=9)
@@ -21,7 +23,7 @@ kospi = pd.DataFrame()
 recent_kospi_high = 0
 recent_kospi_low = 0
 
-print("[1단계] KOSPI 데이터 수집 시도...")
+print("[1순위] pykrx를 통한 KOSPI 데이터 수집 시도...")
 for attempt in range(max_retries):
     try:
         temp_kospi = stock.get_index_ohlcv(start_date, end_date, "1001", name_display=False)
@@ -29,12 +31,58 @@ for attempt in range(max_retries):
             kospi = temp_kospi[['시가', '종가']].rename(columns={'시가': 'KOSPI_Open', '종가': 'KOSPI_Close'})
             recent_kospi_high = temp_kospi['고가'].tail(60).max()
             recent_kospi_low = temp_kospi['저가'].tail(60).min()
-            print("KOSPI 데이터 수집 완료 (pykrx)")
+            print("✅ KOSPI 데이터 수집 완료 (pykrx)")
             break
     except Exception as e:
         time.sleep(3)
 
+# pykrx 실패 시 공공데이터포털 API 시도
 if kospi.empty:
+    print("\n⚠️ pykrx 수집 실패. [2순위] 공공데이터포털 API를 시도합니다...")
+    data_go_kr_key = os.environ.get("DATA_GO_KR_KEY")
+    
+    if data_go_kr_key:
+        try:
+            url = 'http://apis.data.go.kr/1160100/service/GetMarketIndexInfoService/getStockMarketIndex'
+            params = {
+                'serviceKey': data_go_kr_key,
+                'numOfRows': '1000', # 최근 약 4년치 데이터 (영업일 기준)
+                'pageNo': '1',
+                'idxNm': '코스피'
+            }
+            
+            response = requests.get(url, params=params, timeout=10)
+            root = ET.fromstring(response.text)
+            
+            dates, opens, closes, highs, lows = [], [], [], [], []
+            for item in root.findall('.//item'):
+                dates.append(item.find('basDt').text)
+                opens.append(float(item.find('mkp').text))
+                closes.append(float(item.find('clpr').text))
+                highs.append(float(item.find('hipr').text))
+                lows.append(float(item.find('lopr').text))
+            
+            if dates:
+                temp_df = pd.DataFrame({
+                    'Date': pd.to_datetime(dates),
+                    'KOSPI_Open': opens,
+                    'KOSPI_Close': closes,
+                    'High': highs,
+                    'Low': lows
+                }).set_index('Date').sort_index()
+                
+                kospi = temp_df[['KOSPI_Open', 'KOSPI_Close']]
+                recent_kospi_high = temp_df['High'].tail(60).max()
+                recent_kospi_low = temp_df['Low'].tail(60).min()
+                print("✅ KOSPI 데이터 수집 완료 (공공데이터포털 API)")
+        except Exception as e:
+            print(f"❌ 공공데이터포털 API 수집 실패: {e}")
+    else:
+        print("ℹ️ 공공데이터포털 API 키(DATA_GO_KR_KEY)가 설정되지 않아 건너뜁니다.")
+
+# 공공데이터포털도 실패 시 Yahoo Finance 백업 시도
+if kospi.empty:
+    print("\n⚠️ 공공데이터 수집 실패. [3순위] yfinance 백업을 시도합니다...")
     try:
         yf_start = start_date[:4] + '-' + start_date[4:6] + '-' + start_date[6:]
         yf_end = end_date[:4] + '-' + end_date[4:6] + '-' + end_date[6:]
@@ -46,16 +94,20 @@ if kospi.empty:
             kospi.index = kospi.index.tz_localize(None)
             recent_kospi_high = temp_kospi['High'].tail(60).max()
             recent_kospi_low = temp_kospi['Low'].tail(60).min()
-            print("KOSPI 데이터 수집 완료 (yfinance 백업)")
+            print("✅ KOSPI 데이터 수집 완료 (yfinance 백업)")
     except Exception as e:
-        print("KOSPI 수집 실패")
+        print("❌ KOSPI 백업 데이터 수집 실패")
         sys.exit()
+
+if kospi.empty:
+    print("❌ KOSPI 데이터 수집에 완전히 실패했습니다. 연산을 중단합니다.")
+    sys.exit()
 
 kospi = kospi.dropna()
 current_kospi = kospi['KOSPI_Close'].iloc[-1]
 
 # 3. 미국 지수 및 한국 야간 대체지표 통합 수집
-print("[2단계] 미국 지수 및 한국 야간 지표(EWY) 수집...")
+print("\n[3단계] 미국 지수 및 한국 야간 지표(EWY) 수집...")
 night_futures_msg = "데이터 수집 실패"
 try:
     yf_start = start_date[:4] + '-' + start_date[4:6] + '-' + start_date[6:]
@@ -85,13 +137,13 @@ try:
     direction = "상승" if ewy_return > 0 else "하락" if ewy_return < 0 else "보합"
     night_futures_msg = f"종가 ${last_ewy:,.2f} ({direction} {ewy_return:+.2f}%)"
     
-    print("미국 지수 및 한국 야간 지표 수집 완료")
+    print("✅ 미국 지수 및 한국 야간 지표 수집 완료")
 except Exception as e:
-    print(f"미국 지수 수집 실패: {e}")
+    print(f"❌ 미국 지수 수집 실패: {e}")
     sys.exit()
 
 # 4. 코스피 수급 데이터 수집
-print("[3단계] 코스피 수급 데이터 수집...")
+print("\n[4단계] 코스피 수급 데이터 수집...")
 investor_msg = "해외 IP 차단으로 인한 데이터 수집 생략"
 try:
     b_days = stock.get_business_days_dates(recent_60_days, end_date)
@@ -105,9 +157,9 @@ try:
     inst_net = investor_df.loc['기관합계', net_buy_col] / 100000000
     
     investor_msg = f"외국인: {foreign_net:,.0f}억 / 기관: {inst_net:,.0f}억 / 개인: {retail_net:,.0f}억"
-    print("수급 데이터 수집 완료")
+    print("✅ 수급 데이터 수집 완료")
 except Exception as e:
-    print("수급 데이터 수집 실패 (기본값 처리)")
+    print("⚠️ 수급 데이터 수집 실패 (기본값 처리)")
 
 # 5. 데이터 병합 및 통계 확률 연산
 df = pd.merge(kospi, nasdaq, left_index=True, right_index=True, how='left')
@@ -181,7 +233,7 @@ sox_color = get_color(latest_sox_return)
 kospi_exp_color = get_color(expected_kospi_return)
 ewy_color = get_color(ewy_return)
 
-# 8. HTML 템플릿 (블로거 호환성 향상을 위해 간결한 태그 적용)
+# 8. HTML 템플릿 
 html_report = f"""
 <div style="font-family: 'Noto Sans KR', sans-serif; color: #333;">
   
@@ -233,13 +285,6 @@ html_report = f"""
   <p style="font-size: 12px; color: #aaa; text-align: right; margin-top: 40px;">※ 본 리포트는 자동화된 퀀트 봇에 의해 작성되었으며, 투자의 참고 자료로만 활용하시기 바랍니다.</p>
 </div>
 """
-
-print("\n--- 분석 결과 (HTML 렌더링 전) ---")
-print("고점:", recent_kospi_high, "/ 저점:", recent_kospi_low, "/ 현재가:", current_kospi)
-for k, v in near_res:
-    print(f"[저항] {k}: {v:,.2f}")
-for k, v in near_sup:
-    print(f"[지지] {k}: {v:,.2f}")
 
 # 9. 구글 앱스 스크립트 웹훅 전송
 webhook_url = "https://script.google.com/macros/s/AKfycbxsrM75Ecuk70Xsf3jgMTsvCQiJpyYT6Q-tsQhIGeHq5J7opkB77-892jHdDtAuQdf6dA/exec"
