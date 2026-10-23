@@ -2,7 +2,9 @@ name: Daily KOSPI Predict Bot
 
 on:
   schedule:
-    - cron: '23 23 * * 0-4'
+    # 한국 시간(KST) 오전 7시 00분 실행
+    # = UTC 시간 일~목 밤 22시 00분
+    - cron: '0 22 * * 0-4'
   workflow_dispatch: 
 
 jobs:
